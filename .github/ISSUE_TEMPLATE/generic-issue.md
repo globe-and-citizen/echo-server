@@ -8,13 +8,4 @@ about: The minimum information required to create an issue is a title, descripti
 
 
 **Acceptance Criteria:**
-
-
-**Description**
-
-
-
-**Acceptance Criteria**
-
-
-
+- [ ] ...
