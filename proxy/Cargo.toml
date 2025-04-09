@@ -1,0 +1,9 @@
+[package]
+name = "proxy"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+async-trait="0.1"
+#pingora = { version = "0.3", features = [ "lb" ] }
+pingora = { git = "https://github.com/dtpthao/pingora.git", tag = "0.4.1", features = [ "lb" ]  }
