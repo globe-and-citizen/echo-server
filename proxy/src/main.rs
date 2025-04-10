@@ -1,142 +1,140 @@
+// Copyright 2025 Cloudflare, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use async_trait::async_trait;
-use pingora::prelude::*;
-use std::sync::Arc;
+use bytes::Bytes;
+use clap::Parser;
+use serde::{Deserialize, Serialize};
+use std::net::ToSocketAddrs;
 
-// fn main() {
-//     let mut my_server = Server::new(None).unwrap();
-//     my_server.bootstrap();
-//     my_server.run_forever();
-// }
+use pingora::server::configuration::Opt;
+use pingora::server::Server;
+use pingora::upstreams::peer::HttpPeer;
+use pingora::Result;
+use pingora::http::ResponseHeader;
+use pingora::proxy::{ProxyHttp, Session};
 
-pub struct LB(Arc<LoadBalancer<RoundRobin>>);
+const HOST: &str = "ip.jsontest.com";
+
+#[derive(Serialize, Deserialize)]
+pub struct Resp {
+    ip: String,
+}
+
+pub struct Json2Yaml {
+    addr: std::net::SocketAddr,
+}
+
+pub struct MyCtx {
+    buffer: Vec<u8>,
+}
 
 #[async_trait]
-impl ProxyHttp for LB {
-
-    /// For this small example, we don't need context storage
-    type CTX = ();
-    fn new_ctx(&self) -> () {
-        ()
+impl ProxyHttp for Json2Yaml {
+    type CTX = MyCtx;
+    fn new_ctx(&self) -> Self::CTX {
+        MyCtx { buffer: vec![] }
     }
 
-    async fn upstream_peer(&self, _session: &mut Session, _ctx: &mut ()) -> Result<Box<HttpPeer>> {
-        let upstream = self.0
-            .select(b"", 256) // hash doesn't matter for round robin
-            .unwrap();
-
-        println!("upstream peer is: {upstream:?}");
-
-        // Set SNI to one.one.one.one
-        let peer = Box::new(HttpPeer::new(upstream, true, "one.one.one.one".to_string()));
+    async fn upstream_peer(
+        &self,
+        _session: &mut Session,
+        _ctx: &mut Self::CTX,
+    ) -> Result<Box<HttpPeer>> {
+        let peer = Box::new(HttpPeer::new(self.addr, false, HOST.to_owned()));
         Ok(peer)
     }
 
     async fn upstream_request_filter(
         &self,
         _session: &mut Session,
-        upstream_request: &mut RequestHeader,
+        upstream_request: &mut pingora::http::RequestHeader,
         _ctx: &mut Self::CTX,
     ) -> Result<()> {
-        upstream_request.insert_header("Host", "one.one.one.one").unwrap();
+        upstream_request
+            .insert_header("Host", HOST.to_owned())
+            .unwrap();
         Ok(())
+    }
+
+    async fn response_filter(
+        &self,
+        _session: &mut Session,
+        upstream_response: &mut ResponseHeader,
+        _ctx: &mut Self::CTX,
+    ) -> Result<()>
+    where
+        Self::CTX: Send + Sync,
+    {
+        // Remove content-length because the size of the new body is unknown
+        upstream_response.remove_header("Content-Length");
+        upstream_response
+            .insert_header("Transfer-Encoding", "Chunked")
+            .unwrap();
+        Ok(())
+    }
+
+    fn response_body_filter(
+        &self,
+        _session: &mut Session,
+        body: &mut Option<Bytes>,
+        end_of_stream: bool,
+        ctx: &mut Self::CTX,
+    ) -> Result<Option<std::time::Duration>>
+    where
+        Self::CTX: Send + Sync,
+    {
+        // buffer the data
+        if let Some(b) = body {
+            ctx.buffer.extend(&b[..]);
+            // drop the body
+            b.clear();
+        }
+        if end_of_stream {
+            // This is the last chunk, we can process the data now
+            let json_body: Resp = serde_json::de::from_slice(&ctx.buffer).unwrap();
+            let yaml_body = serde_yaml::to_string(&json_body).unwrap();
+            *body = Some(Bytes::copy_from_slice(yaml_body.as_bytes()));
+        }
+
+        Ok(None)
     }
 }
 
+// RUST_LOG=INFO cargo run --example modify_response
+// curl 127.0.0.1:6191
 fn main() {
-    let mut my_server = Server::new(None).unwrap();
+    env_logger::init();
+
+    let opt = Opt::parse();
+    let mut my_server = Server::new(Some(opt)).unwrap();
     my_server.bootstrap();
 
-    let upstreams =
-        LoadBalancer::try_from_iter(["1.1.1.1:443", "1.0.0.1:443"]).unwrap();
+    let mut my_proxy = pingora::proxy::http_proxy_service(
+        &my_server.configuration,
+        Json2Yaml {
+            // hardcode the IP of ip.jsontest.com for now
+            addr: ("142.251.2.121", 80)
+                .to_socket_addrs()
+                .unwrap()
+                .next()
+                .unwrap(),
+        },
+    );
 
-    let mut lb = http_proxy_service(&my_server.configuration, LB(Arc::new(upstreams)));
-    lb.add_tcp("0.0.0.0:6188");
+    my_proxy.add_tcp("127.0.0.1:6191");
 
-    my_server.add_service(lb);
-
+    my_server.add_service(my_proxy);
     my_server.run_forever();
 }
-
-//
-// use async_trait::async_trait;
-// use clap::Parser;
-// use log::info;
-// use pingora_core::services::background::background_service;
-// use std::{sync::Arc, time::Duration};
-//
-// use pingora_core::server::configuration::Opt;
-// use pingora_core::server::Server;
-// use pingora_core::upstreams::peer::HttpPeer;
-// use pingora_core::Result;
-// use pingora_load_balancing::{health_check, selection::RoundRobin, LoadBalancer};
-// use pingora_proxy::{ProxyHttp, Session};
-//
-// pub struct LB(Arc<LoadBalancer<RoundRobin>>);
-//
-// #[async_trait]
-// impl ProxyHttp for LB {
-//     type CTX = ();
-//     fn new_ctx(&self) -> Self::CTX {}
-//
-//     async fn upstream_peer(&self, _session: &mut Session, _ctx: &mut ()) -> Result<Box<HttpPeer>> {
-//         let upstream = self
-//             .0
-//             .select(b"", 256) // hash doesn't matter
-//             .unwrap();
-//
-//         info!("upstream peer is: {:?}", upstream);
-//
-//         let peer = Box::new(HttpPeer::new(upstream, true, "one.one.one.one".to_string()));
-//         Ok(peer)
-//     }
-//
-//     async fn upstream_request_filter(
-//         &self,
-//         _session: &mut Session,
-//         upstream_request: &mut pingora_http::RequestHeader,
-//         _ctx: &mut Self::CTX,
-//     ) -> Result<()> {
-//         upstream_request
-//             .insert_header("Host", "one.one.one.one")
-//             .unwrap();
-//         Ok(())
-//     }
-// }
-//
-// // RUST_LOG=INFO cargo run --example load_balancer
-// fn main() {
-//     env_logger::init();
-//
-//     // read command line arguments
-//     let opt = Opt::parse();
-//     let mut my_server = Server::new(Some(opt)).unwrap();
-//     my_server.bootstrap();
-//
-//     // 127.0.0.1:343" is just a bad server
-//     let mut upstreams =
-//         LoadBalancer::try_from_iter(["1.1.1.1:443", "1.0.0.1:443", "127.0.0.1:343"]).unwrap();
-//
-//     // We add health check in the background so that the bad server is never selected.
-//     let hc = health_check::TcpHealthCheck::new();
-//     upstreams.set_health_check(hc);
-//     upstreams.health_check_frequency = Some(Duration::from_secs(1));
-//
-//     let background = background_service("health check", upstreams);
-//
-//     let upstreams = background.task();
-//
-//     let mut lb = pingora_proxy::http_proxy_service(&my_server.configuration, LB(upstreams));
-//     lb.add_tcp("0.0.0.0:6188");
-//
-//     let cert_path = format!("{}/tests/keys/server.crt", env!("CARGO_MANIFEST_DIR"));
-//     let key_path = format!("{}/tests/keys/key.pem", env!("CARGO_MANIFEST_DIR"));
-//
-//     let mut tls_settings =
-//         pingora_core::listeners::tls::TlsSettings::intermediate(&cert_path, &key_path).unwrap();
-//     tls_settings.enable_h2();
-//     lb.add_tls_with_settings("0.0.0.0:6189", None, tls_settings);
-//
-//     my_server.add_service(lb);
-//     my_server.add_service(background);
-//     my_server.run_forever();
-// }
