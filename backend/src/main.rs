@@ -20,6 +20,7 @@ struct Response {
 }
 
 async fn handle_post(Json(payload): Json<Input>) -> Json<Response> {
+    println!("reached request handling! foo: {}", payload.foo);
     let reply = Response {
         message: format!("Hello, {}!", payload.foo),
     };
@@ -29,6 +30,7 @@ async fn handle_post(Json(payload): Json<Input>) -> Json<Response> {
 #[tokio::main]
 async fn main() {
     let cors = CorsLayer::new()
+        .allow_origin("http://localhost:6191".parse::<HeaderValue>().unwrap())
         .allow_origin("http://localhost:5173".parse::<HeaderValue>().unwrap())
         .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
         .allow_credentials(true)

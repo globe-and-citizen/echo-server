@@ -25,7 +25,9 @@ use pingora::Result;
 use pingora::http::ResponseHeader;
 use pingora::proxy::{ProxyHttp, Session};
 
-const HOST: &str = "ip.jsontest.com";
+const UPSTREAM_HOST: &str = "localhost";
+const UPSTREAM_IP: &str = "0.0.0.0"; //"125.235.4.59"
+const UPSTREAM_PORT: u16 = 8000;
 
 #[derive(Serialize, Deserialize)]
 pub struct Resp {
@@ -52,7 +54,7 @@ impl ProxyHttp for Json2Yaml {
         _session: &mut Session,
         _ctx: &mut Self::CTX,
     ) -> Result<Box<HttpPeer>> {
-        let peer = Box::new(HttpPeer::new(self.addr, false, HOST.to_owned()));
+        let peer = Box::new(HttpPeer::new(self.addr, false, UPSTREAM_HOST.to_owned()));
         Ok(peer)
     }
 
@@ -63,7 +65,7 @@ impl ProxyHttp for Json2Yaml {
         _ctx: &mut Self::CTX,
     ) -> Result<()> {
         upstream_request
-            .insert_header("Host", HOST.to_owned())
+            .insert_header("Host", UPSTREAM_HOST.to_owned())
             .unwrap();
         Ok(())
     }
@@ -124,8 +126,7 @@ fn main() {
     let mut my_proxy = pingora::proxy::http_proxy_service(
         &my_server.configuration,
         Json2Yaml {
-            // hardcode the IP of ip.jsontest.com for now
-            addr: ("142.251.2.121", 80)
+            addr: (UPSTREAM_IP.to_owned(), UPSTREAM_PORT)
                 .to_socket_addrs()
                 .unwrap()
                 .next()
