@@ -8,10 +8,12 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use tower_http::cors::CorsLayer;
+use tower_http::trace::{self, TraceLayer};
+use tracing::Level;
 
 #[derive(Deserialize)]
 struct Input {
-    foo: String
+    foo: String,
 }
 
 #[derive(Serialize)]
@@ -36,9 +38,20 @@ async fn main() {
         .allow_credentials(true)
         .allow_headers([AUTHORIZATION, ACCEPT, CONTENT_TYPE]);
 
-    let app = Router::new().route("/post", post(handle_post)).layer(cors);
+    tracing_subscriber::fmt()
+        .with_target(false)
+        .compact()
+        .init();
 
-    println!("🚀 Server started successfully");
+    let app = Router::new()
+        .route("/post", post(handle_post))
+        .layer(cors)
+        .layer(TraceLayer::new_for_http()
+            .make_span_with(trace::DefaultMakeSpan::new().level(Level::INFO))
+            .on_response(trace::DefaultOnResponse::new().level(Level::INFO))
+        );
+
+        println!("🚀 Server started successfully");
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8000").await.unwrap();
     axum::serve(listener, app).await.unwrap();
 }
