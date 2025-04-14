@@ -34,6 +34,11 @@ pub struct RequestBody {
     data: String,
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ResponseBody {
+    data: String,
+}
+
 pub struct EchoProxy {
     addr: std::net::SocketAddr,
 }
@@ -72,17 +77,20 @@ impl ProxyHttp for EchoProxy {
         }
 
         let json_body: RequestBody = serde_json::de::from_slice(&body).unwrap();
-        println!("Request body: {:?}", json_body);
+        println!("{:?}", json_body);
 
         // TODO manipulate body
+        let response_body = ResponseBody{data: format!("Hello from echo server! - {}", json_body.data)};
+        let response_bytes = serde_json::ser::to_vec(&response_body).unwrap();
 
-        let new_body = "Hello, World!";
         let mut header = ResponseHeader::build(200, None)?;
-        header.append_header("Content-Length", new_body.len().to_string());
+        header.append_header("Content-Length", response_bytes.len().to_string());
+
         session.write_response_header_ref(&header).await?;
-        // session
-        //     .write_response_body(Some(Bytes::from(new_body.bytes())), true)
-        //     .await?;
+        session
+            .write_response_body(Some(Bytes::from(response_bytes)), true)
+            .await?;
+
         Ok(true)
     }
 }

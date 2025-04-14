@@ -21,24 +21,18 @@ import axios from "axios";
 const message = ref("")
 const answer = ref("")
 const PROXY_ADDR = "http://localhost:6191/post"
-const BACKEND_ADDR = "http://localhost:8000/post"
 
 async function ask() {
-  answer.value = "Lorem Ipsum is simply dummy text of the printing and typesetting industry. Lorem Ipsum has been the industry's standard dummy text ever since the 1500s, when an unknown printer took a galley of type and scrambled it to make a type specimen book. It has survived not only five centuries, but also the leap into electronic typesetting, remaining essentially unchanged. It was popularised in the 1960s with the release of Letraset sheets containing Lorem Ipsum passages, and more recently with desktop publishing software like Aldus PageMaker including versions of Lorem Ipsum."
-  let res = await axios.post(PROXY_ADDR, //https://httpbin.org/post",
-      {foo: "bar"},
+  let res = await axios.post(PROXY_ADDR,
+      {data: message.value},
       {
         headers: {
           'Content-Type': "application/json",
-          // 'Accept-Encoding': "deflate, gzip",
-          // 'User-Agent': "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
           'Accept': "application/json",
-          // 'Referrer-Policy': "origin-when-cross-origin"
         }
       }
   )
-  // answer.value = res.data
-  console.log(res)
+  answer.value = res.data
 }
 
 function clear() {
