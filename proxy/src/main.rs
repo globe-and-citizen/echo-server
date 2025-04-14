@@ -8,7 +8,7 @@ use pingora::server::configuration::Opt;
 use pingora::server::Server;
 use pingora::upstreams::peer::HttpPeer;
 use pingora::{Error, Result};
-use pingora::http::{ResponseHeader, StatusCode};
+use pingora::http::{ResponseHeader, StatusCode, Method};
 use pingora::proxy::{ProxyHttp, Session};
 use log::{info, error, debug, LevelFilter};
 
@@ -40,6 +40,13 @@ pub struct MyCtx {
     buffer: Vec<u8>,
 }
 
+fn get_method(session: &Session) -> String {
+    let request_summary = session.request_summary();
+    let tmp: Vec<&str> = request_summary.split(" ").collect();
+    let method: &str = tmp.get(0).unwrap();
+    method.to_string()
+}
+
 #[async_trait]
 impl ProxyHttp for EchoProxy {
     type CTX = MyCtx;
@@ -56,43 +63,49 @@ impl ProxyHttp for EchoProxy {
         Ok(peer)
     }
 
-
     async fn request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> Result<bool>
     where
         Self::CTX: Send + Sync,
     {
-        let mut body = Vec::new();
-        loop {
-            match session.read_request_body().await? {
-                Some(chunk) => body.extend_from_slice(&chunk),
-                None => break,
+        let method = get_method(session);
+
+        let mut response_body = ResponseBody { data: String::from("") };
+        let mut header = ResponseHeader::build(StatusCode::OK, None)?;
+
+        if method == Method::POST.to_string() {
+            let mut body = Vec::new();
+            loop {
+                match session.read_request_body().await? {
+                    Some(chunk) => body.extend_from_slice(&chunk),
+                    None => break,
+                }
             }
+
+            match serde_json::de::from_slice::<RequestBody>(&body) {
+                Ok(request_body) => {
+                    debug!("Request body: {:?}", request_body);
+                    // TODO manipulate body here
+                    response_body = ResponseBody { data: format!("Hello from echo server! - {}", request_body.data) }
+                }
+                Err(err) => {
+                    error!("ERROR: {err}");
+                    let _ = header.set_status(StatusCode::BAD_REQUEST);
+                }
+            };
+        } else if method == Method::OPTIONS.to_string() {
+            header.set_status(StatusCode::NO_CONTENT).unwrap();
+        } else {
+            let _ = header.set_status(StatusCode::METHOD_NOT_ALLOWED);
         }
 
-        let mut response_body = ResponseBody{ data: String::from("") };
-        let mut status = StatusCode::OK;
-
-        match serde_json::de::from_slice::<RequestBody>(&body) {
-            Ok(request_body) => {
-                debug!("Request body: {:?}", request_body);
-                // TODO manipulate body here
-                response_body = ResponseBody { data: format!("Hello from echo server! - {}", request_body.data)}
-            }
-            Err(err) => {
-                error!("ERROR: {err}");
-                status = StatusCode::BAD_REQUEST;
-            }
-        };
-
         let response_bytes = serde_json::ser::to_vec(&response_body).unwrap();
-
-        let mut header = ResponseHeader::build(status, None)?;
-        let _ = header.append_header("Content-Length", response_bytes.len().to_string());
-
+        header.append_header("Content-Length", response_bytes.len().to_string()).unwrap();
+        header.append_header("Access-Control-Allow-Origin", "*".to_string()).unwrap();
+        header.append_header("Access-Control-Allow-Methods", "POST".to_string()).unwrap();
+        header.append_header("Access-Control-Allow-Headers", "Content-Type".to_string()).unwrap();
+        header.append_header("Access-Control-Max-Age", "86400".to_string()).unwrap();
         session.write_response_header_ref(&header).await?;
-        session
-            .write_response_body(Some(Bytes::from(response_bytes)), true)
-            .await?;
+        session.write_response_body(Some(Bytes::from(response_bytes)), true).await?;
 
         Ok(true)
     }
