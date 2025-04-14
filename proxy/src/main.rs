@@ -22,7 +22,7 @@ use pingora::server::configuration::Opt;
 use pingora::server::Server;
 use pingora::upstreams::peer::HttpPeer;
 use pingora::Result;
-use pingora::http::ResponseHeader;
+use pingora::http::{ResponseHeader, StatusCode};
 use pingora::proxy::{ProxyHttp, Session};
 
 const UPSTREAM_HOST: &str = "localhost";
@@ -59,7 +59,7 @@ impl ProxyHttp for EchoProxy {
         _session: &mut Session,
         _ctx: &mut Self::CTX,
     ) -> Result<Box<HttpPeer>> {
-        let peer = Box::new(HttpPeer::new(self.addr, false, UPSTREAM_HOST.to_owned()));
+        let peer: Box<HttpPeer> = Box::new(HttpPeer::new(self.addr, false, UPSTREAM_HOST.to_owned()));
         Ok(peer)
     }
 
@@ -76,15 +76,25 @@ impl ProxyHttp for EchoProxy {
             }
         }
 
-        let json_body: RequestBody = serde_json::de::from_slice(&body).unwrap();
-        println!("{:?}", json_body);
+        let mut response_body = ResponseBody{ data: String::from("") };
+        let mut status = StatusCode::OK;
 
-        // TODO manipulate body
-        let response_body = ResponseBody{data: format!("Hello from echo server! - {}", json_body.data)};
+        match serde_json::de::from_slice::<RequestBody>(&body) {
+            Ok(request_body) => {
+                println!("{:?}", request_body);
+                // TODO manipulate body here
+                response_body = ResponseBody { data: format!("Hello from echo server! - {}", request_body.data)}
+            }
+            Err(err) => {
+                eprintln!("ERROR: {:?}", err);
+                status = StatusCode::BAD_REQUEST;
+            }
+        };
+
         let response_bytes = serde_json::ser::to_vec(&response_body).unwrap();
 
-        let mut header = ResponseHeader::build(200, None)?;
-        header.append_header("Content-Length", response_bytes.len().to_string());
+        let mut header = ResponseHeader::build(status, None)?;
+        let _ = header.append_header("Content-Length", response_bytes.len().to_string());
 
         session.write_response_header_ref(&header).await?;
         session
