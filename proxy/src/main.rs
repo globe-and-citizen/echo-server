@@ -29,12 +29,12 @@ const UPSTREAM_HOST: &str = "localhost";
 const UPSTREAM_IP: &str = "0.0.0.0"; //"125.235.4.59"
 const UPSTREAM_PORT: u16 = 8000;
 
-#[derive(Serialize, Deserialize)]
-pub struct Resp {
-    ip: String,
+#[derive(Serialize, Deserialize, Debug)]
+pub struct RequestBody {
+    data: String,
 }
 
-pub struct Json2Yaml {
+pub struct EchoProxy {
     addr: std::net::SocketAddr,
 }
 
@@ -43,7 +43,7 @@ pub struct MyCtx {
 }
 
 #[async_trait]
-impl ProxyHttp for Json2Yaml {
+impl ProxyHttp for EchoProxy {
     type CTX = MyCtx;
     fn new_ctx(&self) -> Self::CTX {
         MyCtx { buffer: vec![] }
@@ -58,63 +58,36 @@ impl ProxyHttp for Json2Yaml {
         Ok(peer)
     }
 
-    async fn upstream_request_filter(
-        &self,
-        _session: &mut Session,
-        upstream_request: &mut pingora::http::RequestHeader,
-        _ctx: &mut Self::CTX,
-    ) -> Result<()> {
-        upstream_request
-            .insert_header("Host", UPSTREAM_HOST.to_owned())
-            .unwrap();
-        Ok(())
-    }
 
-    async fn response_filter(
-        &self,
-        _session: &mut Session,
-        upstream_response: &mut ResponseHeader,
-        _ctx: &mut Self::CTX,
-    ) -> Result<()>
+    async fn request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> Result<bool>
     where
         Self::CTX: Send + Sync,
     {
-        // Remove content-length because the size of the new body is unknown
-        upstream_response.remove_header("Content-Length");
-        upstream_response
-            .insert_header("Transfer-Encoding", "Chunked")
-            .unwrap();
-        Ok(())
-    }
-
-    fn response_body_filter(
-        &self,
-        _session: &mut Session,
-        body: &mut Option<Bytes>,
-        end_of_stream: bool,
-        ctx: &mut Self::CTX,
-    ) -> Result<Option<std::time::Duration>>
-    where
-        Self::CTX: Send + Sync,
-    {
-        // buffer the data
-        if let Some(b) = body {
-            ctx.buffer.extend(&b[..]);
-            // drop the body
-            b.clear();
-        }
-        if end_of_stream {
-            // This is the last chunk, we can process the data now
-            let json_body: Resp = serde_json::de::from_slice(&ctx.buffer).unwrap();
-            let yaml_body = serde_yaml::to_string(&json_body).unwrap();
-            *body = Some(Bytes::copy_from_slice(yaml_body.as_bytes()));
+        let mut body = Vec::new();
+        loop {
+            match session.read_request_body().await? {
+                Some(chunk) => body.extend_from_slice(&chunk),
+                None => break,
+            }
         }
 
-        Ok(None)
+        let json_body: RequestBody = serde_json::de::from_slice(&body).unwrap();
+        println!("Request body: {:?}", json_body);
+
+        // TODO manipulate body
+
+        let new_body = "Hello, World!";
+        let mut header = ResponseHeader::build(200, None)?;
+        header.append_header("Content-Length", new_body.len().to_string());
+        session.write_response_header_ref(&header).await?;
+        // session
+        //     .write_response_body(Some(Bytes::from(new_body.bytes())), true)
+        //     .await?;
+        Ok(true)
     }
 }
 
-// RUST_LOG=INFO cargo run --example modify_response
+// RUST_LOG=INFO cargo run proxy
 // curl 127.0.0.1:6191
 fn main() {
     env_logger::init();
@@ -125,7 +98,7 @@ fn main() {
 
     let mut my_proxy = pingora::proxy::http_proxy_service(
         &my_server.configuration,
-        Json2Yaml {
+        EchoProxy {
             addr: (UPSTREAM_IP.to_owned(), UPSTREAM_PORT)
                 .to_socket_addrs()
                 .unwrap()
