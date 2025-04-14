@@ -32,7 +32,7 @@ async function ask() {
         }
       }
   )
-  answer.value = res.data
+  answer.value = res.data.data
 }
 
 function clear() {
