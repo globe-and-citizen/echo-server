@@ -1,17 +1,3 @@
-// Copyright 2025 Cloudflare, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 use async_trait::async_trait;
 use bytes::Bytes;
 use clap::Parser;
@@ -21,9 +7,16 @@ use std::net::ToSocketAddrs;
 use pingora::server::configuration::Opt;
 use pingora::server::Server;
 use pingora::upstreams::peer::HttpPeer;
-use pingora::Result;
+use pingora::{Error, Result};
 use pingora::http::{ResponseHeader, StatusCode};
 use pingora::proxy::{ProxyHttp, Session};
+use log::{info, error, debug, LevelFilter};
+
+use env_logger;
+use chrono::Local;
+use log::*;
+use std::fs::{File, OpenOptions};
+use std::io::Write;
 
 const UPSTREAM_HOST: &str = "localhost";
 const UPSTREAM_IP: &str = "0.0.0.0"; //"125.235.4.59"
@@ -81,12 +74,12 @@ impl ProxyHttp for EchoProxy {
 
         match serde_json::de::from_slice::<RequestBody>(&body) {
             Ok(request_body) => {
-                println!("{:?}", request_body);
+                debug!("Request body: {:?}", request_body);
                 // TODO manipulate body here
                 response_body = ResponseBody { data: format!("Hello from echo server! - {}", request_body.data)}
             }
             Err(err) => {
-                eprintln!("ERROR: {:?}", err);
+                error!("ERROR: {err}");
                 status = StatusCode::BAD_REQUEST;
             }
         };
@@ -103,12 +96,47 @@ impl ProxyHttp for EchoProxy {
 
         Ok(true)
     }
+
+    async fn logging(
+        &self,
+        session: &mut Session,
+        _e: Option<&pingora::Error>,
+        ctx: &mut Self::CTX,
+    ) {
+        let response_code = session
+            .response_written()
+            .map_or(0, |resp| resp.status.as_u16());
+        // access log
+        info!("{} response code: {response_code}", self.request_summary(session, ctx));
+    }
 }
 
 // RUST_LOG=INFO cargo run proxy
 // curl 127.0.0.1:6191
 fn main() {
-    env_logger::init();
+    let file = OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open("log.txt")
+        .expect("Can't create file!");
+
+    let target = Box::new(file);
+
+    env_logger::Builder::new()
+        .target(env_logger::Target::Pipe(target))
+        .filter(None, LevelFilter::Debug)
+        .format(|buf, record| {
+            writeln!(
+                buf,
+                "[{} {} {}:{}] {}",
+                Local::now().format("%Y-%m-%d %H:%M:%S%.3f"),
+                record.level(),
+                record.file().unwrap_or("unknown"),
+                record.line().unwrap_or(0),
+                record.args()
+            )
+        })
+        .init();
 
     let opt = Opt::parse();
     let mut my_server = Server::new(Some(opt)).unwrap();
@@ -121,7 +149,7 @@ fn main() {
                 .to_socket_addrs()
                 .unwrap()
                 .next()
-                .unwrap(),
+                .unwrap()
         },
     );
 
