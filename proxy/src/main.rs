@@ -1,17 +1,4 @@
-// Copyright 2025 Cloudflare, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
+use std::fmt::Error;
 use async_trait::async_trait;
 use bytes::Bytes;
 use clap::Parser;
@@ -21,18 +8,31 @@ use std::net::ToSocketAddrs;
 use pingora::server::configuration::Opt;
 use pingora::server::Server;
 use pingora::upstreams::peer::HttpPeer;
-use pingora::Result;
-use pingora::http::ResponseHeader;
+use pingora::{Result};
+use pingora::http::{ResponseHeader, StatusCode, Method};
 use pingora::proxy::{ProxyHttp, Session};
 
-const HOST: &str = "ip.jsontest.com";
+use env_logger;
+use chrono::Local;
+use log::*;
+use std::fs::{OpenOptions};
+use std::io::Write;
 
-#[derive(Serialize, Deserialize)]
-pub struct Resp {
-    ip: String,
+const UPSTREAM_HOST: &str = "localhost";
+const UPSTREAM_IP: &str = "0.0.0.0"; //"125.235.4.59"
+const UPSTREAM_PORT: u16 = 8000;
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct RequestBody {
+    data: String,
 }
 
-pub struct Json2Yaml {
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ResponseBody {
+    data: String,
+}
+
+pub struct EchoProxy {
     addr: std::net::SocketAddr,
 }
 
@@ -40,8 +40,52 @@ pub struct MyCtx {
     buffer: Vec<u8>,
 }
 
+impl EchoProxy {
+    fn get_method(session: &Session) -> String {
+        let request_summary = session.request_summary();
+        let tmp: Vec<&str> = request_summary.split(" ").collect();
+        let method: &str = tmp.get(0).unwrap();
+        method.to_string()
+    }
+
+    async fn handle_request(session: &mut Session) -> Result<Option<ResponseBody>> {
+        // read request body
+        let mut body = Vec::new();
+        loop {
+            match session.read_request_body().await? {
+                Some(chunk) => body.extend_from_slice(&chunk),
+                None => break,
+            }
+        }
+
+        // convert to json
+        match serde_json::de::from_slice::<RequestBody>(&body) {
+            Ok(request_body) => {
+                debug!("Request body: {:?}", request_body);
+                // TODO manipulate body here
+                Ok(Some(ResponseBody { data: format!("Hello from echo server! - {}", request_body.data) }))
+            }
+            Err(err) => {
+                error!("ERROR: {err}");
+                Ok(None)
+            }
+        }
+    }
+
+    async fn set_headers(response_status: StatusCode, body_bytes: &Vec<u8>, session: &mut Session) -> Result<()> {
+        let mut header = ResponseHeader::build(response_status, None)?;
+        header.append_header("Content-Length", body_bytes.len().to_string()).unwrap();
+        // access headers below are needed to pass browser's policy
+        header.append_header("Access-Control-Allow-Origin", "*".to_string()).unwrap();
+        header.append_header("Access-Control-Allow-Methods", "POST".to_string()).unwrap();
+        header.append_header("Access-Control-Allow-Headers", "Content-Type".to_string()).unwrap();
+        header.append_header("Access-Control-Max-Age", "86400".to_string()).unwrap();
+        session.write_response_header_ref(&header).await
+    }
+}
+
 #[async_trait]
-impl ProxyHttp for Json2Yaml {
+impl ProxyHttp for EchoProxy {
     type CTX = MyCtx;
     fn new_ctx(&self) -> Self::CTX {
         MyCtx { buffer: vec![] }
@@ -52,70 +96,85 @@ impl ProxyHttp for Json2Yaml {
         _session: &mut Session,
         _ctx: &mut Self::CTX,
     ) -> Result<Box<HttpPeer>> {
-        let peer = Box::new(HttpPeer::new(self.addr, false, HOST.to_owned()));
+        let peer: Box<HttpPeer> = Box::new(HttpPeer::new(self.addr, false, UPSTREAM_HOST.to_owned()));
         Ok(peer)
     }
 
-    async fn upstream_request_filter(
-        &self,
-        _session: &mut Session,
-        upstream_request: &mut pingora::http::RequestHeader,
-        _ctx: &mut Self::CTX,
-    ) -> Result<()> {
-        upstream_request
-            .insert_header("Host", HOST.to_owned())
-            .unwrap();
-        Ok(())
-    }
-
-    async fn response_filter(
-        &self,
-        _session: &mut Session,
-        upstream_response: &mut ResponseHeader,
-        _ctx: &mut Self::CTX,
-    ) -> Result<()>
+    async fn request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> Result<bool>
     where
         Self::CTX: Send + Sync,
     {
-        // Remove content-length because the size of the new body is unknown
-        upstream_response.remove_header("Content-Length");
-        upstream_response
-            .insert_header("Transfer-Encoding", "Chunked")
-            .unwrap();
-        Ok(())
+        let mut response_body = ResponseBody { data: String::from("") };
+        let mut response_status = StatusCode::OK;
+
+        // get request method
+        let method = EchoProxy::get_method(session);
+
+        // only POST method is allowed for now
+        if method == Method::POST.to_string() {
+            match EchoProxy::handle_request(session).await? {
+                Some(res) => {
+                    response_body = res;
+                }
+                None => {
+                    response_status = StatusCode::BAD_REQUEST;
+                }
+            }
+            // browser always sends an OPTIONS request along with POST for 'application/json' content-type
+        } else if method == Method::OPTIONS.to_string() {
+            response_status = StatusCode::NO_CONTENT;
+        } else {
+            response_status = StatusCode::METHOD_NOT_ALLOWED;
+        }
+
+        // convert json response to vec
+        let response_body_bytes = serde_json::ser::to_vec(&response_body).unwrap();
+        EchoProxy::set_headers(response_status, &response_body_bytes, session).await?;
+        session.write_response_body(Some(Bytes::from(response_body_bytes)), true).await?;
+
+        Ok(true)
     }
 
-    fn response_body_filter(
+    async fn logging(
         &self,
-        _session: &mut Session,
-        body: &mut Option<Bytes>,
-        end_of_stream: bool,
+        session: &mut Session,
+        _e: Option<&pingora::Error>,
         ctx: &mut Self::CTX,
-    ) -> Result<Option<std::time::Duration>>
-    where
-        Self::CTX: Send + Sync,
-    {
-        // buffer the data
-        if let Some(b) = body {
-            ctx.buffer.extend(&b[..]);
-            // drop the body
-            b.clear();
-        }
-        if end_of_stream {
-            // This is the last chunk, we can process the data now
-            let json_body: Resp = serde_json::de::from_slice(&ctx.buffer).unwrap();
-            let yaml_body = serde_yaml::to_string(&json_body).unwrap();
-            *body = Some(Bytes::copy_from_slice(yaml_body.as_bytes()));
-        }
-
-        Ok(None)
+    ) {
+        let response_code = session
+            .response_written()
+            .map_or(0, |resp| resp.status.as_u16());
+        // access log
+        info!("{} response code: {response_code}", self.request_summary(session, ctx));
     }
 }
 
-// RUST_LOG=INFO cargo run --example modify_response
+// RUST_LOG=INFO cargo run proxy
 // curl 127.0.0.1:6191
 fn main() {
-    env_logger::init();
+    let file = OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open("log.txt")
+        .expect("Can't create file!");
+
+    let target = Box::new(file);
+
+    env_logger::Builder::new()
+        .target(env_logger::Target::Pipe(target))
+        .filter(None, LevelFilter::Debug)
+        .format(|buf, record| {
+            writeln!(
+                buf,
+                "[{} {} {}:{}] {}",
+                Local::now().format("%Y-%m-%d %H:%M:%S%.3f"),
+                record.level(),
+                record.file().unwrap_or("unknown"),
+                record.line().unwrap_or(0),
+                record.args()
+            )
+        })
+        .init();
 
     let opt = Opt::parse();
     let mut my_server = Server::new(Some(opt)).unwrap();
@@ -123,13 +182,12 @@ fn main() {
 
     let mut my_proxy = pingora::proxy::http_proxy_service(
         &my_server.configuration,
-        Json2Yaml {
-            // hardcode the IP of ip.jsontest.com for now
-            addr: ("142.251.2.121", 80)
+        EchoProxy {
+            addr: (UPSTREAM_IP.to_owned(), UPSTREAM_PORT)
                 .to_socket_addrs()
                 .unwrap()
                 .next()
-                .unwrap(),
+                .unwrap()
         },
     );
 
