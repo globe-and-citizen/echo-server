@@ -15,3 +15,6 @@ serde_yaml = "0.8.26"
 env_logger = "0.11.7"
 log = "0.4.27"
 chrono = "0.4.40"
+
+#[patch.crates-io]
+#sfv = { git = "https://github.com/undef1nd/sfv.git", tag = "v0.9.4" }

@@ -1,3 +1,4 @@
+use std::fmt::Error;
 use async_trait::async_trait;
 use bytes::Bytes;
 use clap::Parser;
@@ -7,15 +8,14 @@ use std::net::ToSocketAddrs;
 use pingora::server::configuration::Opt;
 use pingora::server::Server;
 use pingora::upstreams::peer::HttpPeer;
-use pingora::{Error, Result};
+use pingora::{Result};
 use pingora::http::{ResponseHeader, StatusCode, Method};
 use pingora::proxy::{ProxyHttp, Session};
-use log::{info, error, debug, LevelFilter};
 
 use env_logger;
 use chrono::Local;
 use log::*;
-use std::fs::{File, OpenOptions};
+use std::fs::{OpenOptions};
 use std::io::Write;
 
 const UPSTREAM_HOST: &str = "localhost";
@@ -40,11 +40,48 @@ pub struct MyCtx {
     buffer: Vec<u8>,
 }
 
-fn get_method(session: &Session) -> String {
-    let request_summary = session.request_summary();
-    let tmp: Vec<&str> = request_summary.split(" ").collect();
-    let method: &str = tmp.get(0).unwrap();
-    method.to_string()
+impl EchoProxy {
+    fn get_method(session: &Session) -> String {
+        let request_summary = session.request_summary();
+        let tmp: Vec<&str> = request_summary.split(" ").collect();
+        let method: &str = tmp.get(0).unwrap();
+        method.to_string()
+    }
+
+    async fn handle_request(session: &mut Session) -> Result<Option<ResponseBody>> {
+        // read request body
+        let mut body = Vec::new();
+        loop {
+            match session.read_request_body().await? {
+                Some(chunk) => body.extend_from_slice(&chunk),
+                None => break,
+            }
+        }
+
+        // convert to json
+        match serde_json::de::from_slice::<RequestBody>(&body) {
+            Ok(request_body) => {
+                debug!("Request body: {:?}", request_body);
+                // TODO manipulate body here
+                Ok(Some(ResponseBody { data: format!("Hello from echo server! - {}", request_body.data) }))
+            }
+            Err(err) => {
+                error!("ERROR: {err}");
+                Ok(None)
+            }
+        }
+    }
+
+    async fn set_headers(response_status: StatusCode, body_bytes: &Vec<u8>, session: &mut Session) -> Result<()> {
+        let mut header = ResponseHeader::build(response_status, None)?;
+        header.append_header("Content-Length", body_bytes.len().to_string()).unwrap();
+        // access headers below are needed to pass browser's policy
+        header.append_header("Access-Control-Allow-Origin", "*".to_string()).unwrap();
+        header.append_header("Access-Control-Allow-Methods", "POST".to_string()).unwrap();
+        header.append_header("Access-Control-Allow-Headers", "Content-Type".to_string()).unwrap();
+        header.append_header("Access-Control-Max-Age", "86400".to_string()).unwrap();
+        session.write_response_header_ref(&header).await
+    }
 }
 
 #[async_trait]
@@ -67,45 +104,33 @@ impl ProxyHttp for EchoProxy {
     where
         Self::CTX: Send + Sync,
     {
-        let method = get_method(session);
-
         let mut response_body = ResponseBody { data: String::from("") };
-        let mut header = ResponseHeader::build(StatusCode::OK, None)?;
+        let mut response_status = StatusCode::OK;
 
+        // get request method
+        let method = EchoProxy::get_method(session);
+
+        // only POST method is allowed for now
         if method == Method::POST.to_string() {
-            let mut body = Vec::new();
-            loop {
-                match session.read_request_body().await? {
-                    Some(chunk) => body.extend_from_slice(&chunk),
-                    None => break,
+            match EchoProxy::handle_request(session).await? {
+                Some(res) => {
+                    response_body = res;
+                }
+                None => {
+                    response_status = StatusCode::BAD_REQUEST;
                 }
             }
-
-            match serde_json::de::from_slice::<RequestBody>(&body) {
-                Ok(request_body) => {
-                    debug!("Request body: {:?}", request_body);
-                    // TODO manipulate body here
-                    response_body = ResponseBody { data: format!("Hello from echo server! - {}", request_body.data) }
-                }
-                Err(err) => {
-                    error!("ERROR: {err}");
-                    let _ = header.set_status(StatusCode::BAD_REQUEST);
-                }
-            };
+            // browser always sends an OPTIONS request along with POST for 'application/json' content-type
         } else if method == Method::OPTIONS.to_string() {
-            header.set_status(StatusCode::NO_CONTENT).unwrap();
+            response_status = StatusCode::NO_CONTENT;
         } else {
-            let _ = header.set_status(StatusCode::METHOD_NOT_ALLOWED);
+            response_status = StatusCode::METHOD_NOT_ALLOWED;
         }
 
-        let response_bytes = serde_json::ser::to_vec(&response_body).unwrap();
-        header.append_header("Content-Length", response_bytes.len().to_string()).unwrap();
-        header.append_header("Access-Control-Allow-Origin", "*".to_string()).unwrap();
-        header.append_header("Access-Control-Allow-Methods", "POST".to_string()).unwrap();
-        header.append_header("Access-Control-Allow-Headers", "Content-Type".to_string()).unwrap();
-        header.append_header("Access-Control-Max-Age", "86400".to_string()).unwrap();
-        session.write_response_header_ref(&header).await?;
-        session.write_response_body(Some(Bytes::from(response_bytes)), true).await?;
+        // convert json response to vec
+        let response_body_bytes = serde_json::ser::to_vec(&response_body).unwrap();
+        EchoProxy::set_headers(response_status, &response_body_bytes, session).await?;
+        session.write_response_body(Some(Bytes::from(response_body_bytes)), true).await?;
 
         Ok(true)
     }
