@@ -44,6 +44,7 @@ fn log_init() {
 fn main() {
     log_init();
 
+    // fixme secret should not be hardcoded
     let crypto_service = crypto::service::CryptoService::new(b"secret");
 
     let opt = Opt::parse();

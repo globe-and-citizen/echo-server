@@ -4,11 +4,13 @@ use std::fmt::Error;
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::net::ToSocketAddrs;
+use std::panic::panic_any;
 use log::{debug, error, info};
 use pingora::upstreams::peer::HttpPeer;
 use pingora::{Result};
 use pingora::http::{ResponseHeader, StatusCode, Method};
 use pingora::proxy::{ProxyHttp, Session};
+use ring::signature::Signature;
 use crate::crypto::EchoCrypto;
 
 const UPSTREAM_HOST: &str = "localhost";
@@ -18,11 +20,12 @@ const UPSTREAM_PORT: u16 = 8000;
 #[derive(Serialize, Deserialize, Debug)]
 pub struct RequestBody {
     data: String,
+    signature: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ResponseBody {
-    data: String,
+    result: String,
 }
 
 pub struct MyCtx {
@@ -31,7 +34,8 @@ pub struct MyCtx {
 
 pub struct EchoProxy<T: EchoCrypto> {
     addr: std::net::SocketAddr,
-    crypto_service: T
+    routes: Vec<String>,
+    crypto_service: T,
 }
 
 impl<T: EchoCrypto> EchoProxy<T> {
@@ -42,23 +46,69 @@ impl<T: EchoCrypto> EchoProxy<T> {
             .next()
             .unwrap();
 
-        EchoProxy { addr, crypto_service }
+        // todo routes are hardcoded for now
+        let routes = vec![
+            "sign".to_string(),
+            "verify".to_string(),
+        ];
+
+        EchoProxy { addr, routes, crypto_service }
     }
 
-    fn get_method(session: &Session) -> String {
+    fn extract_request_summary(session: &Session) -> (String, String) {
         let request_summary = session.request_summary();
-        let tmp: Vec<&str> = request_summary.split(" ").collect();
-        let method: &str = tmp.get(0).unwrap();
-        method.to_string()
+        let parts: Vec<&str> = request_summary.split_whitespace().collect();
+
+        if parts.len() > 1 {
+            let method = parts[0].to_string();
+            let path = parts[1]
+                .split('/')
+                .collect::<Vec<&str>>()
+                .get(1) // todo
+                .unwrap_or(&"")
+                .trim_end_matches(',')
+                .to_string();
+            (method, path)
+        } else {
+            error!("Invalid request summary: {}", request_summary);
+            (String::new(), String::new())
+        }
     }
 
-    async fn handle_request(session: &mut Session) -> Result<Option<ResponseBody>> {
+    fn validate_request(&self, session: &Session) -> StatusCode {
+        let (method, path) = EchoProxy::<T>::extract_request_summary(session);
+
+        // only POST method is allowed for now
+        if method == Method::POST.to_string() {
+            // check if path is allowed
+            if self.routes.contains(&path) {
+                StatusCode::OK
+            } else {
+                StatusCode::NOT_FOUND
+            }
+            // browser always sends an OPTIONS request along with POST for 'application/json' content-type
+        } else if method == Method::OPTIONS.to_string() {
+            StatusCode::NO_CONTENT
+        } else {
+            StatusCode::METHOD_NOT_ALLOWED
+        }
+    }
+
+    async fn get_request_body(session: &mut Session) -> Option<RequestBody> {
         // read request body
         let mut body = Vec::new();
         loop {
-            match session.read_request_body().await? {
-                Some(chunk) => body.extend_from_slice(&chunk),
-                None => break,
+            match session.read_request_body().await {
+                Ok(option) => {
+                    match option {
+                        Some(chunk) => body.extend_from_slice(&chunk),
+                        None => break,
+                    }
+                }
+                Err(err) => {
+                    error!("ERROR: {err}");
+                    break;
+                }
             }
         }
 
@@ -66,11 +116,72 @@ impl<T: EchoCrypto> EchoProxy<T> {
         match serde_json::de::from_slice::<RequestBody>(&body) {
             Ok(request_body) => {
                 debug!("Request body: {:?}", request_body);
-                // TODO manipulate body here
-                Ok(Some(ResponseBody { data: format!("Hello from echo server! - {}", request_body.data) }))
+                Some(request_body)
             }
             Err(err) => {
                 error!("ERROR: {err}");
+                None
+            }
+        }
+    }
+
+    fn handle_sign_request(&self, request_body: &RequestBody) -> Result<Option<ResponseBody>> {
+        // sign the data
+        let signature = self.crypto_service.sign_message(&request_body.data.as_bytes());
+        let hex_signature = hex::encode(signature);
+
+        Ok(Some(ResponseBody { result: hex_signature }))
+    }
+
+    fn handle_verify_request(&self, request_body: &RequestBody) -> Result<Option<ResponseBody>> {
+        match &request_body.signature {
+            Some(signature) => {
+                debug!("Signature: {:?}", signature);
+                // convert hex signature to bytes
+                let signature = hex::decode(signature).unwrap_or_else(|_| {
+                    error!("Failed to decode hex signature");
+                    vec![]
+                });
+
+                // verify the data
+                let is_valid = self.crypto_service.verify_signature(
+                    &request_body.data.as_bytes(),
+                    signature.as_ref(),
+                );
+
+                if is_valid {
+                    Ok(Some(ResponseBody { result: "valid".to_string() }))
+                } else {
+                    Ok(Some(ResponseBody { result: "invalid".to_string() }))
+                }
+            }
+            None => {
+                error!("Signature is missing");
+                Ok(None)
+            }
+        }
+    }
+
+    async fn handle_request(&self, session: &mut Session) -> Result<Option<ResponseBody>> {
+        // read request body
+        match EchoProxy::<T>::get_request_body(session).await {
+            Some(request_body) => {
+                debug!("Request body: {:?}", request_body);
+
+                let (_, route) = EchoProxy::<T>::extract_request_summary(session);
+                match route.as_str() {
+                    "verify" => {
+                        self.handle_verify_request(&request_body)
+                    }
+                    "sign" => {
+                        self.handle_sign_request(&request_body)
+                    }
+                    _ => {
+                        panic_any("this line shouldn't be reached because of the validate_request method");
+                    }
+                }
+            }
+            None => {
                 Ok(None)
             }
         }
@@ -108,31 +219,24 @@ impl<T: EchoCrypto + Sync> ProxyHttp for EchoProxy<T> {
     where
         Self::CTX: Send + Sync,
     {
-        let mut response_body = ResponseBody { data: String::from("") };
+        let mut response_body_bytes = Vec::new();
         let mut response_status = StatusCode::OK;
 
-        // get request method
-        let method = EchoProxy::<T>::get_method(session);
-
-        // only POST method is allowed for now
-        if method == Method::POST.to_string() {
-            match EchoProxy::<T>::handle_request(session).await? {
+        // validate request
+        response_status = self.validate_request(session);
+        if response_status == StatusCode::OK {
+            // handle request
+            match self.handle_request(session).await? {
                 Some(res) => {
-                    response_body = res;
+                    response_body_bytes = serde_json::ser::to_vec(&res).unwrap();
                 }
                 None => {
                     response_status = StatusCode::BAD_REQUEST;
                 }
             }
-            // browser always sends an OPTIONS request along with POST for 'application/json' content-type
-        } else if method == Method::OPTIONS.to_string() {
-            response_status = StatusCode::NO_CONTENT;
-        } else {
-            response_status = StatusCode::METHOD_NOT_ALLOWED;
         }
 
         // convert json response to vec
-        let response_body_bytes = serde_json::ser::to_vec(&response_body).unwrap();
         EchoProxy::<T>::set_headers(response_status, &response_body_bytes, session).await?;
         session.write_response_body(Some(Bytes::from(response_body_bytes)), true).await?;
 

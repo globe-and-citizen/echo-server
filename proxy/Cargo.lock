@@ -1331,6 +1331,7 @@ dependencies = [
  "chrono",
  "clap",
  "env_logger",
+ "hex",
  "log",
  "pingora",
  "ring",
