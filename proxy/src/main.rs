@@ -1,5 +1,6 @@
 mod proxy;
 mod crypto;
+mod handler;
 
 use clap::Parser;
 use env_logger;
@@ -46,6 +47,7 @@ fn main() {
 
     // fixme secret should not be hardcoded
     let crypto_service = crypto::service::CryptoService::new(b"secret");
+    let handler = handler::Handler::new(crypto_service);
 
     let opt = Opt::parse();
     let mut my_server = Server::new(Some(opt)).unwrap();
@@ -53,7 +55,7 @@ fn main() {
 
     let mut my_proxy = pingora::proxy::http_proxy_service(
         &my_server.configuration,
-        proxy::EchoProxy::new(crypto_service),
+        proxy::EchoProxy::new(handler),
     );
 
     my_proxy.add_tcp("127.0.0.1:6191");
