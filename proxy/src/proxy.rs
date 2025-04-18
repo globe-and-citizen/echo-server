@@ -9,6 +9,7 @@ use pingora::upstreams::peer::HttpPeer;
 use pingora::{Result};
 use pingora::http::{ResponseHeader, StatusCode, Method};
 use pingora::proxy::{ProxyHttp, Session};
+use crate::crypto::EchoCrypto;
 
 const UPSTREAM_HOST: &str = "localhost";
 const UPSTREAM_IP: &str = "0.0.0.0"; //"125.235.4.59"
@@ -28,18 +29,20 @@ pub struct MyCtx {
     buffer: Vec<u8>,
 }
 
-pub struct EchoProxy {
+pub struct EchoProxy<T: EchoCrypto> {
     addr: std::net::SocketAddr,
+    crypto_service: T
 }
 
-impl EchoProxy {
-    pub(crate) fn new() -> Self {
+impl<T: EchoCrypto> EchoProxy<T> {
+    pub(crate) fn new(crypto_service: T) -> Self {
         let addr = (UPSTREAM_IP.to_owned(), UPSTREAM_PORT)
             .to_socket_addrs()
             .unwrap()
             .next()
             .unwrap();
-        EchoProxy { addr }
+
+        EchoProxy { addr, crypto_service }
     }
 
     fn get_method(session: &Session) -> String {
@@ -86,7 +89,7 @@ impl EchoProxy {
 }
 
 #[async_trait]
-impl ProxyHttp for EchoProxy {
+impl<T: EchoCrypto + Sync> ProxyHttp for EchoProxy<T> {
     type CTX = MyCtx;
     fn new_ctx(&self) -> Self::CTX {
         MyCtx { buffer: vec![] }
@@ -109,11 +112,11 @@ impl ProxyHttp for EchoProxy {
         let mut response_status = StatusCode::OK;
 
         // get request method
-        let method = EchoProxy::get_method(session);
+        let method = EchoProxy::<T>::get_method(session);
 
         // only POST method is allowed for now
         if method == Method::POST.to_string() {
-            match EchoProxy::handle_request(session).await? {
+            match EchoProxy::<T>::handle_request(session).await? {
                 Some(res) => {
                     response_body = res;
                 }
@@ -130,7 +133,7 @@ impl ProxyHttp for EchoProxy {
 
         // convert json response to vec
         let response_body_bytes = serde_json::ser::to_vec(&response_body).unwrap();
-        EchoProxy::set_headers(response_status, &response_body_bytes, session).await?;
+        EchoProxy::<T>::set_headers(response_status, &response_body_bytes, session).await?;
         session.write_response_body(Some(Bytes::from(response_body_bytes)), true).await?;
 
         Ok(true)
