@@ -24,12 +24,12 @@ pub struct ResponseBody {
     data: String,
 }
 
-pub struct EchoProxy {
-    addr: std::net::SocketAddr,
-}
-
 pub struct MyCtx {
     buffer: Vec<u8>,
+}
+
+pub struct EchoProxy {
+    addr: std::net::SocketAddr,
 }
 
 impl EchoProxy {

@@ -1,4 +1,5 @@
 mod proxy;
+mod crypto;
 
 use clap::Parser;
 use env_logger;
@@ -10,6 +11,7 @@ use std::io::Write;
 
 use pingora::server::configuration::Opt;
 use pingora::server::Server;
+use crate::crypto::EchoCrypto;
 
 fn log_init() {
     let file = OpenOptions::new()
@@ -41,6 +43,14 @@ fn log_init() {
 // curl 127.0.0.1:6191
 fn main() {
     log_init();
+
+    let crypto_service = crypto::service::CryptoService::new(b"secret");
+    let echo_crypto = Box::new(crypto_service);
+
+    let sign = echo_crypto.sign_message(b"hello world");
+    let verify = echo_crypto.verify_signature(b"hello world", &sign);
+    println!("sign: {:?}", sign);
+    println!("verify: {:?}", verify);
 
     let opt = Opt::parse();
     let mut my_server = Server::new(Some(opt)).unwrap();
