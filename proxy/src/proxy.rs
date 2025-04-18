@@ -1,18 +1,13 @@
 use async_trait::async_trait;
 use bytes::Bytes;
-use std::fmt::Error;
-use clap::Parser;
-use serde::{Deserialize, Serialize};
 use std::net::ToSocketAddrs;
-use std::panic::panic_any;
-use log::{debug, error, info};
+use log::{info};
 use pingora::upstreams::peer::HttpPeer;
 use pingora::{Result};
-use pingora::http::{ResponseHeader, StatusCode, Method};
+use pingora::http::{StatusCode};
 use pingora::proxy::{ProxyHttp, Session};
-use ring::signature::Signature;
 use crate::crypto::EchoCrypto;
-use crate::handler::{Handler, RequestBody, ResponseBody};
+use crate::handler::{Handler};
 
 const UPSTREAM_HOST: &str = "localhost";
 const UPSTREAM_IP: &str = "0.0.0.0"; //"125.235.4.59"
@@ -60,10 +55,9 @@ impl<T: EchoCrypto + Sync> ProxyHttp for EchoProxy<T> {
         Self::CTX: Send + Sync,
     {
         let mut response_body_bytes = Vec::new();
-        let mut response_status = StatusCode::OK;
 
         // validate request
-        response_status = self.handler.validate_request(session);
+        let mut response_status = self.handler.validate_request(session);
         if response_status == StatusCode::OK {
             // handle request
             match self.handler.handle_request(session).await? {

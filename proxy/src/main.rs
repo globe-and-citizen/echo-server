@@ -6,13 +6,11 @@ use clap::Parser;
 use env_logger;
 use chrono::Local;
 use log::*;
-use std::net::ToSocketAddrs;
 use std::fs::OpenOptions;
 use std::io::Write;
 
 use pingora::server::configuration::Opt;
 use pingora::server::Server;
-use crate::crypto::EchoCrypto;
 
 fn log_init() {
     let file = OpenOptions::new()
