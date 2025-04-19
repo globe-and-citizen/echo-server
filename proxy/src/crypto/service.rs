@@ -16,6 +16,7 @@ impl CryptoService {
         // Create the keypair using the hashed secret
         let keypair = Ed25519KeyPair::from_seed_unchecked(seed_bytes.as_ref()).expect("Failed to create keypair");
 
+        println!("Keypair created: {:?}", keypair.public_key());
         // Store the keypair in the OnceLock
         let once_lock_keypair = OnceLock::new();
         once_lock_keypair.get_or_init(|| { keypair });
