@@ -1,0 +1,26 @@
+# Name of the workflow, displayed in the GitHub Actions UI
+name: Run Tests
+
+# Define the events that trigger this workflow
+on:
+  push: # Trigger the workflow on a push event
+    branches:
+      - '**' # Matches all branches, so the workflow runs on any branch push
+
+# Define the jobs to be executed in the workflow
+jobs:
+  test: # Name of the job
+    runs-on: ubuntu-latest # Specify the environment to run the job (latest Ubuntu version)
+
+    steps: # List of steps to execute in the job
+      - name: Checkout code # Step to check out the repository code
+        uses: actions/checkout@v3 # Use the GitHub-provided action to clone the repository
+
+      - name: Set up Rust # Step to set up the Rust toolchain
+        uses: actions-rs/toolchain@v1 # Use the Rust toolchain action
+        with: # Configuration for the Rust toolchain
+          toolchain: stable # Use the stable version of Rust
+          override: true # Override any existing Rust version in the environment
+
+      - name: Run tests # Step to run the tests
+        run: cargo test # Execute the `cargo test` command to run all tests in the Rust project
