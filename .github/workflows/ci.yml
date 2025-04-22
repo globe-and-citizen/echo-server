@@ -6,6 +6,7 @@ on:
   push: # Trigger the workflow on a push event
     branches:
       - '**' # Matches all branches, so the workflow runs on any branch push
+    pull_request: # Trigger the workflow on a pull request event
 
 # Define the jobs to be executed in the workflow
 jobs:
