@@ -9,10 +9,6 @@ use pingora::proxy::{ProxyHttp, Session};
 use crate::crypto::EchoCrypto;
 use crate::handler::{Handler};
 
-const UPSTREAM_HOST: &str = "localhost";
-const UPSTREAM_IP: &str = "0.0.0.0"; //"125.235.4.59"
-const UPSTREAM_PORT: u16 = 8000;
-
 pub struct MyCtx {
     buffer: Vec<u8>,
 }
@@ -23,8 +19,8 @@ pub struct EchoProxy<T: EchoCrypto> {
 }
 
 impl<T: EchoCrypto> EchoProxy<T> {
-    pub(crate) fn new(handler: Handler<T>) -> Self {
-        let addr = (UPSTREAM_IP.to_owned(), UPSTREAM_PORT)
+    pub(crate) fn new(upstream_host: String, upstream_port: u16, handler: Handler<T>) -> Self {
+        let addr = (upstream_host, upstream_port)
             .to_socket_addrs()
             .unwrap()
             .next()
@@ -46,7 +42,7 @@ impl<T: EchoCrypto + Sync> ProxyHttp for EchoProxy<T> {
         _session: &mut Session,
         _ctx: &mut Self::CTX,
     ) -> Result<Box<HttpPeer>> {
-        let peer: Box<HttpPeer> = Box::new(HttpPeer::new(self.addr, false, UPSTREAM_HOST.to_owned()));
+        let peer: Box<HttpPeer> = Box::new(HttpPeer::new(self.addr, false, self.addr.ip().to_string()));
         Ok(peer)
     }
 
