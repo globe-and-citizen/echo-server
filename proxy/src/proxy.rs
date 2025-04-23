@@ -46,7 +46,7 @@ impl<T: EchoCrypto + Sync> ProxyHttp for EchoProxy<T> {
         Ok(peer)
     }
 
-    async fn request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> Result<bool>
+    async fn request_filter(&self, session: &mut Session, _ctx: &mut Self::CTX) -> Result<bool>
     where
         Self::CTX: Send + Sync,
     {
