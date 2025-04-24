@@ -6,7 +6,7 @@ port=0
 address="127.0.0.1:6191"
 
 [log]
-level="debug"
+level="DEBUG"
 path="log.txt"
 
 [crypto]

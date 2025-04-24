@@ -31,7 +31,7 @@ pub(super) struct LogConfig {
 
 impl LogConfig {
     pub fn to_level_filter(&self) -> log::LevelFilter {
-        match self.level.as_str() {
+        match self.level.to_uppercase().as_str() {
             "INFO" => log::LevelFilter::Info,
             "DEBUG" => log::LevelFilter::Debug,
             "WARNING" => log::LevelFilter::Warn,
