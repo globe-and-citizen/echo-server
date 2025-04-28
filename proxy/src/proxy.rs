@@ -9,10 +9,6 @@ use pingora::proxy::{ProxyHttp, Session};
 use crate::crypto::EchoCrypto;
 use crate::handler::{Handler};
 
-pub struct MyCtx {
-    buffer: Vec<u8>,
-}
-
 pub struct EchoProxy<T: EchoCrypto> {
     addr: std::net::SocketAddr,
     handler: Handler<T>,
@@ -32,9 +28,9 @@ impl<T: EchoCrypto> EchoProxy<T> {
 
 #[async_trait]
 impl<T: EchoCrypto + Sync> ProxyHttp for EchoProxy<T> {
-    type CTX = MyCtx;
+    type CTX = ();
     fn new_ctx(&self) -> Self::CTX {
-        MyCtx { buffer: vec![] }
+        ()
     }
 
     async fn upstream_peer(
