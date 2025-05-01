@@ -1,0 +1,13 @@
+[upstream]
+host="localhost"
+port=0
+
+[server]
+address="127.0.0.1:6191"
+
+[log]
+level="DEBUG"
+path="log.txt"
+
+[crypto]
+secret="my_secret"
