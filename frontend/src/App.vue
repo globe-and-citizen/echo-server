@@ -1,6 +1,5 @@
 <script setup>
 import HelloWorld from './components/HelloWorld.vue'
-import TheWelcome from './components/TheWelcome.vue'
 import Ask from "@/components/Ask.vue";
 </script>
 
@@ -14,8 +13,7 @@ import Ask from "@/components/Ask.vue";
   </header>
 
   <main>
-<!--    <TheWelcome />-->
-    <ask/>
+    <Ask/>
   </main>
 </template>
 

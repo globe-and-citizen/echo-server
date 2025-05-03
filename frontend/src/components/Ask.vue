@@ -223,33 +223,6 @@ textarea {
   font-family: monospace;
 }
 
-.action-row {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  margin-top: 1rem;
-  flex-wrap: wrap;
-}
-
-.button-group {
-  display: flex;
-  gap: 0.5rem;
-}
-
-.button-group button {
-  background-color: #42b983;
-  color: #fff;
-  border: none;
-  border-radius: 8px;
-  padding: 0.6rem 1.2rem;
-  font-size: 1rem;
-  cursor: pointer;
-  transition: background-color 0.2s ease-in-out;
-}
-
-.button-group button:hover {
-  background-color: #369b6d;
-}
 
 .verify-result p {
   margin: 0;
